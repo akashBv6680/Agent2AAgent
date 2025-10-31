@@ -1,22 +1,15 @@
 # Core Streamlit application
 streamlit
 
-# LangChain's core library
+# Core LangChain package
 langchain
 
-# LangChain's integration libraries (these contain modularized components)
-# 'langchain-openai' for the ChatOpenAI/OpenAI LLM
+# LangChain's modular packages for LLM and tools
 langchain-openai
-
-# 'langchain-community' for various integrations, including tools like DuckDuckGoSearch
 langchain-community
 
-# Tool dependencies (e.g., if you use the DuckDuckGo search tool)
-duckduckgo-search
+# The critical package containing the 'hub' functionality
+langchain-hub
 
-# Optional: If you are using Streamlit's callback handler (highly recommended for streaming)
-# If your previous code used StreamlitCallbackHandler, this ensures it's available.
-# The callback is often included in langchain-community, but having it explicitly helps.
-# For modern LangChain, the callbacks are typically handled by StreamlitCallbackHandler 
-# which is part of the core LangChain ecosystem now.
-# This list is comprehensive for a typical agent setup.
+# Dependency for the DuckDuckGoSearchRun tool used in the app
+duckduckgo-search
