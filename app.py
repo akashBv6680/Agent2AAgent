@@ -9,9 +9,9 @@ AGENT_DISCOVERY_TITLE = "Available A2A Agents (Mock Discovery)"
 DATA_SCIENCE_KB_TITLE = "Data Science Knowledge Base Context"
 USER_AVATAR = "👤"
 ASSISTANT_AVATAR = "🤖"
+GEMINI_MODEL_ROLE = "model" # The role required by the Gemini API for its responses
 
 # --- Mock Agent Discovery List ---
-# In a real A2A setup, this would be fetched from a discovery endpoint (/.well-known/agent-card.json)
 AVAILABLE_AGENTS = [
     {"name": "DataScience-Analyst", "skill": "Analyzes data, explains concepts, writes Python/Pandas code snippets.", "endpoint": "mock-url/datascience"},
     {"name": "HR-Coordinator", "skill": "Manages employee records and answers HR policy questions.", "endpoint": "mock-url/hr"},
@@ -19,7 +19,6 @@ AVAILABLE_AGENTS = [
 ]
 
 # --- Data Science Knowledge Base (KB) Content ---
-# This simulates a 'Knowledge Base' by providing a detailed system instruction for the model.
 DATA_SCIENCE_KB_CONTENT = """
 You are the 'DataScience-Analyst' agent. Your primary function is to answer questions related to Data Science, Machine Learning, and Python programming.
 Always use this knowledge as your primary source of truth:
@@ -39,17 +38,16 @@ st.title(PAGE_TITLE)
 with st.sidebar:
     st.header("Setup & Discovery")
     
-    # Gemini API Key Input
-    # Uses st.secrets if deployed on Streamlit Cloud, or st.text_input for local testing
     gemini_api_key = st.text_input("Gemini API Key", type="password", help="Enter your Gemini API Key. For Streamlit Cloud deployment, set it as a secret: GEMINI_API_KEY.")
     
+    client = None
     if gemini_api_key:
         os.environ["GEMINI_API_KEY"] = gemini_api_key
         try:
             client = genai.Client(api_key=gemini_api_key)
             st.success("API Key set and Client initialized! 🎉")
-        except Exception:
-            st.error("Invalid API Key or initialization failed.")
+        except Exception as e:
+            st.error(f"Invalid API Key or initialization failed: {e}")
             st.stop()
     else:
         st.warning("Please enter your Gemini API Key to start the chat.")
@@ -74,6 +72,7 @@ with st.sidebar:
 
 # Initialize chat history in session state
 if "messages" not in st.session_state:
+    # Each message will have: role (for Streamlit display), content, avatar
     st.session_state.messages = []
 
 # Define the model and system instruction (simulating A2A coordination/KB integration)
@@ -103,14 +102,22 @@ if prompt := st.chat_input("Ask a question about Data Science (e.g., 'What is a 
     # 2. Get Gemini response (simulating A2A execution)
     with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
         with st.spinner("A2A Coordinator is delegating and processing the request..."):
+            
+            # --- FIX APPLIED HERE ---
+            # Correctly map Streamlit's 'assistant' role to Gemini's required 'model' role
+            gemini_contents = [
+                {
+                    "role": GEMINI_MODEL_ROLE if m["role"] == "assistant" else m["role"],
+                    "parts": [{"text": m["content"]}]
+                }
+                for m in st.session_state.messages
+            ]
+            # ------------------------
+            
             try:
-                # The model is configured to act as the coordinator and utilize the KB
                 response = client.models.generate_content(
                     model=MODEL_NAME,
-                    contents=[
-                        {"role": m["role"], "parts": [{"text": m["content"]}]}
-                        for m in st.session_state.messages
-                    ],
+                    contents=gemini_contents,
                     config=genai.types.GenerateContentConfig(
                         system_instruction=SYSTEM_INSTRUCTION
                     )
@@ -120,6 +127,7 @@ if prompt := st.chat_input("Ask a question about Data Science (e.g., 'What is a 
                 st.markdown(full_response)
                 
             except APIError as e:
+                # Display error, but save it to history to maintain sequence (optional, for debugging)
                 full_response = f"An API Error occurred: {e}"
                 st.error(full_response)
             except Exception as e:
@@ -127,6 +135,6 @@ if prompt := st.chat_input("Ask a question about Data Science (e.g., 'What is a 
                 st.error(full_response)
     
     # 3. Add assistant response to history
+    # NOTE: We use the Streamlit role "assistant" for display, 
+    # but the content-building loop maps it to "model" for the API.
     st.session_state.messages.append({"role": "assistant", "content": full_response, "avatar": ASSISTANT_AVATAR})
-
-# --- End of Streamlit App ---
