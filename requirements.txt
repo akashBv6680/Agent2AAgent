@@ -1,15 +1,6 @@
-# Core Streamlit application
 streamlit
-
-# Core LangChain package
+google-genai
 langchain
-
-# LangChain's modular packages for LLM and tools
 langchain-openai
-langchain-community
-
-# The critical package containing the 'hub' functionality
 langchain-hub
-
-# Dependency for the DuckDuckGoSearchRun tool used in the app
 duckduckgo-search
