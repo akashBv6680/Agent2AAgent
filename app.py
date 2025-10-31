@@ -1,24 +1,25 @@
 import streamlit as st
-from langchain import hub
-from langchain.agents import AgentExecutor, create_react_agent, load_tools
-from langchain_openai import OpenAI
-from langchain.callbacks import StreamlitCallbackHandler
 import os
+
+# Updated imports for modern LangChain structure
+from langchain import hub
+from langchain.agents import AgentExecutor, create_react_agent
+from langchain.tools import DuckDuckGoSearchRun
+from langchain_openai import ChatOpenAI
+from langchain.callbacks import StreamlitCallbackHandler
+from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
 
 # --- Configuration and Setup ---
 
-# Set page configuration
 st.set_page_config(page_title="Streamlit LangChain Agent Chat", layout="wide")
-st.title("🤖 LangChain Agent Chat with Streaming")
-st.caption("This agent uses the DuckDuckGo Search tool.")
+st.title("🤖 LangChain Agent with Search")
 
-# Load API Key (Assuming OpenAI key is set in Streamlit secrets or env var)
-# For the agent to run, you must have an OPENAI_API_KEY set.
-try:
-    openai_api_key = os.environ.get("OPENAI_API_KEY") or st.secrets["OPENAI_API_KEY"]
-except (KeyError, AttributeError):
-    st.error("Please set the `OPENAI_API_KEY` in your environment or `secrets.toml` file.")
+# Check for API Key
+# The agent will not run without an OPENAI_API_KEY set in Streamlit secrets or env var.
+if "OPENAI_API_KEY" not in st.secrets:
+    st.error("Please set the `OPENAI_API_KEY` in your `secrets.toml` file.")
     st.stop()
+openai_api_key = st.secrets["OPENAI_API_KEY"]
 
 
 # --- LangChain Agent Initialization (Cached) ---
@@ -26,35 +27,41 @@ except (KeyError, AttributeError):
 @st.cache_resource
 def get_agent_executor(api_key):
     """Initializes and returns the LangChain Agent Executor."""
-    # 1. Initialize the LLM (must support streaming)
-    # Note: Using `OpenAI` or `ChatOpenAI` from langchain_openai
-    llm = OpenAI(temperature=0, streaming=True, api_key=api_key)
+    # 1. Initialize the LLM (ChatOpenAI is generally preferred for agents)
+    llm = ChatOpenAI(temperature=0, streaming=True, api_key=api_key, model="gpt-3.5-turbo")
 
-    # 2. Load the tools the agent will use
-    tools = load_tools(["ddg-search"]) # DuckDuckGo Search
+    # 2. Define the tools the agent will use
+    tools = [
+        DuckDuckGoSearchRun(name="DuckDuckGo Search"),
+    ]
 
-    # 3. Get the prompt to use - ReAct prompt from LangChain Hub
+    # 3. Get the ReAct prompt template from LangChain Hub
     prompt = hub.pull("hwchase17/react")
 
     # 4. Create the ReAct agent
     agent = create_react_agent(llm, tools, prompt)
 
     # 5. Create the Agent Executor
-    agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
+    agent_executor = AgentExecutor(
+        agent=agent, 
+        tools=tools, 
+        verbose=True, 
+        handle_parsing_errors=True
+    )
     
     return agent_executor
 
 agent_executor = get_agent_executor(openai_api_key)
 
 
-# --- Session State Management ---
+# --- Session State and Chat History Display ---
 
 if "messages" not in st.session_state:
     st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! I'm an AI assistant. How can I help you today?"}
+        {"role": "assistant", "content": "Hello! I'm a search-enabled AI assistant. Ask me anything!"}
     ]
 
-# Display chat messages from history on app rerun
+# Display previous chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
@@ -62,33 +69,35 @@ for message in st.session_state.messages:
 # --- Main Logic: React to User Input ---
 
 if prompt := st.chat_input("Ask a question to the agent..."):
-    # 1. Display user message in chat message container and add to history
+    # 1. Display user message
     st.chat_message("user").markdown(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    # 2. Display assistant thinking and response
+    # 2. Display assistant thinking and response with streaming
     with st.chat_message("assistant"):
-        # Create an empty container where the streaming response will be written
-        st_container = st.container()
+        # Create an empty container to receive the streamed output
+        st_container = st.empty()
         
-        # Initialize the StreamlitCallbackHandler to stream output to the container
-        # This is crucial for seeing the agent's thought process and final answer live.
+        # Initialize the StreamlitCallbackHandler
+        # The agent's thoughts and final answer will be streamed here.
         st_callback = StreamlitCallbackHandler(st_container)
         
-        # Invoke the agent executor
-        # The agent's thinking and final answer will be streamed via the callback.
+        final_response = ""
         try:
+            # Invoke the agent executor with the callback
             response = agent_executor.invoke(
                 {"input": prompt},
                 {"callbacks": [st_callback]}
             )
-            # The final output is in response["output"]
+            # The final output is captured after the agent finishes
             final_response = response["output"]
             
         except Exception as e:
             final_response = f"An error occurred: {e}"
             st_container.error(final_response)
 
-        # 3. The `st_container` has already been updated by the callback.
-        # We ensure the final answer is captured in the message history.
+        # 3. Update the container with the final, complete response
+        st_container.markdown(final_response)
+        
+        # 4. Add the final response to chat history
         st.session_state.messages.append({"role": "assistant", "content": final_response})
