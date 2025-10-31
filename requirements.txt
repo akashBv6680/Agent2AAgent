@@ -1,2 +1,5 @@
-streamlit
 google-genai
+streamlit
+langchain
+langchain-openai
+duckduckgo-search
