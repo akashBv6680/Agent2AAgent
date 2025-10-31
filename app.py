@@ -1,140 +1,246 @@
 import streamlit as st
 import os
+import time
 from google import genai
 from google.genai.errors import APIError
 
-# --- Configuration ---
-PAGE_TITLE = "Gemini A2A Agent Quick Tester"
-AGENT_DISCOVERY_TITLE = "Available A2A Agents (Mock Discovery)"
-DATA_SCIENCE_KB_TITLE = "Data Science Knowledge Base Context"
+# --- Configuration & Constants ---
+PAGE_TITLE = "Gemini A2A Agent Dashboard"
 USER_AVATAR = "👤"
 ASSISTANT_AVATAR = "🤖"
-GEMINI_MODEL_ROLE = "model" # The role required by the Gemini API for its responses
+ANALYST_AVATAR = "🔬"
+GEMINI_MODEL_ROLE = "model"
 
-# --- Mock Agent Discovery List ---
-AVAILABLE_AGENTS = [
-    {"name": "DataScience-Analyst", "skill": "Analyzes data, explains concepts, writes Python/Pandas code snippets.", "endpoint": "mock-url/datascience"},
-    {"name": "HR-Coordinator", "skill": "Manages employee records and answers HR policy questions.", "endpoint": "mock-url/hr"},
-    {"name": "Web-Researcher", "skill": "Performs web searches and summarizes external information.", "endpoint": "mock-url/websearch"}
-]
+# --- Agent Profiles ---
+AGENT_PROFILES = {
+    "Coordinator": {
+        "name": "Coordinator-Agent",
+        "avatar": ASSISTANT_AVATAR,
+        "model": "gemini-2.5-flash",
+        "instruction": "You are the Coordinator-Agent. Your primary goal is to manage the user's overall task. You receive input from the user and from the DataScience-Analyst. If the user asks a non-Data Science question (like asking for a status), answer it. If the user asks a Data Science question, you will delegate the task to the Analyst. Respond by acknowledging the task and indicating it is delegated.",
+        "status": "Available",
+    },
+    "Analyst": {
+        "name": "DataScience-Analyst",
+        "avatar": ANALYST_AVATAR,
+        "model": "gemini-2.5-flash",
+        "instruction": """
+            You are the specialized DataScience-Analyst. Your task is to process input specifically related to Data Science, Machine Learning, and Python/Pandas.
+            Always use this knowledge as your primary source:
+            1. Pandas: The primary Python library for data manipulation. Key objects are **Series** and **DataFrame**.
+            2. Scikit-learn (sklearn): The go-to library for classic ML algorithms.
+            3. Data Preprocessing: Essential steps include **Handling missing values**, **Encoding categorical features**, and **Feature Scaling**.
+            4. Python Code: Always respond to code requests with a complete, runnable Python code block.
+            """,
+        "status": "Available",
+    }
+}
 
-# --- Data Science Knowledge Base (KB) Content ---
-DATA_SCIENCE_KB_CONTENT = """
-You are the 'DataScience-Analyst' agent. Your primary function is to answer questions related to Data Science, Machine Learning, and Python programming.
-Always use this knowledge as your primary source of truth:
-1. **Pandas**: The primary Python library for data manipulation. Key objects are **Series** (1D labeled array) and **DataFrame** (2D labeled table).
-2. **Scikit-learn (sklearn)**: The go-to library for classic ML algorithms (e.g., Linear Regression, k-Nearest Neighbors, k-Means).
-3. **Model Evaluation**: For classification, use **Precision, Recall, F1-Score, and AUC-ROC**. For regression, use **Mean Squared Error (MSE), Root Mean Squared Error (RMSE), and R-squared**.
-4. **Data Preprocessing**: Essential steps include **Handling missing values**, **Encoding categorical features** (One-Hot or Label Encoding), and **Feature Scaling** (Standardization or Normalization).
-5. **Python Code**: Always respond to code requests with a complete, runnable Python code block.
-"""
+# --- Utility Functions ---
 
-# --- Streamlit Application ---
+def init_session_state():
+    """Initializes all necessary session state variables."""
+    if "api_client" not in st.session_state:
+        st.session_state.api_client = None
+    
+    # History for the left (Coordinator/Main) chat pane
+    if "main_chat_history" not in st.session_state:
+        st.session_state.main_chat_history = [] 
+
+    # History for the right (Analyst/Secondary) chat pane
+    if "analyst_chat_history" not in st.session_state:
+        st.session_state.analyst_chat_history = []
+
+    # Dynamic status of agents
+    if "agent_status" not in st.session_state:
+        st.session_state.agent_status = {
+            "Coordinator": "Available",
+            "Analyst": "Available"
+        }
+    
+    # The piece of information being passed between agents
+    if "data_transfer" not in st.session_state:
+        st.session_state.data_transfer = None
+
+
+def generate_agent_response(agent_key, history_key, system_instruction, prompt_text):
+    """Generates response using the Gemini API for a specific agent/history."""
+    
+    # 1. Update Agent Status to Working
+    st.session_state.agent_status[agent_key] = "Working"
+    st.rerun() # Rerun to visually update the status indicator immediately
+    
+    client = st.session_state.api_client
+    
+    # Prepare history for the API call (maps Streamlit 'assistant' to Gemini 'model')
+    gemini_contents = [
+        {
+            "role": GEMINI_MODEL_ROLE if m["role"] == "assistant" else m["role"],
+            "parts": [{"text": m["content"]}]
+        }
+        for m in st.session_state[history_key]
+    ]
+
+    # Add the current prompt as the last user message
+    gemini_contents.append({"role": "user", "parts": [{"text": prompt_text}]})
+    
+    try:
+        response = client.models.generate_content(
+            model=AGENT_PROFILES[agent_key]["model"],
+            contents=gemini_contents,
+            config=genai.types.GenerateContentConfig(
+                system_instruction=system_instruction
+            )
+        )
+        
+        # 2. Update Agent Status to Available/Delegated
+        if agent_key == "Coordinator" and "data science" in prompt_text.lower():
+            # If the Coordinator delegates, its status should reflect that
+            st.session_state.agent_status[agent_key] = "Delegated"
+        else:
+            st.session_state.agent_status[agent_key] = "Available"
+        
+        return response.text
+        
+    except APIError as e:
+        st.session_state.agent_status[agent_key] = "Error"
+        return f"An API Error occurred for {agent_key}: {e}"
+    except Exception as e:
+        st.session_state.agent_status[agent_key] = "Error"
+        return f"An unexpected error occurred for {agent_key}: {e}"
+
+# --- Main Application Logic ---
 
 st.set_page_config(page_title=PAGE_TITLE, layout="wide")
 st.title(PAGE_TITLE)
 
-# Sidebar for Setup and Agent Discovery
+init_session_state()
+
+# --- Sidebar for Setup ---
 with st.sidebar:
-    st.header("Setup & Discovery")
+    st.header("Setup & Status")
     
-    gemini_api_key = st.text_input("Gemini API Key", type="password", help="Enter your Gemini API Key. For Streamlit Cloud deployment, set it as a secret: GEMINI_API_KEY.")
+    gemini_api_key = st.text_input("Gemini API Key", type="password", help="Enter your Gemini API Key.")
     
-    client = None
     if gemini_api_key:
         os.environ["GEMINI_API_KEY"] = gemini_api_key
         try:
-            client = genai.Client(api_key=gemini_api_key)
-            st.success("API Key set and Client initialized! 🎉")
+            st.session_state.api_client = genai.Client(api_key=gemini_api_key)
+            st.success("API Client Initialized! 🎉")
         except Exception as e:
             st.error(f"Invalid API Key or initialization failed: {e}")
             st.stop()
     else:
-        st.warning("Please enter your Gemini API Key to start the chat.")
+        st.warning("Please enter your Gemini API Key to start.")
         st.stop()
 
     st.markdown("---")
-
-    # Agent Discovery Section
-    st.subheader(AGENT_DISCOVERY_TITLE)
-    st.info("The A2A protocol allows agents to dynamically discover each other's capabilities.")
-    for agent in AVAILABLE_AGENTS:
-        st.markdown(f"**{ASSISTANT_AVATAR} {agent['name']}**\n- *Skill*: {agent['skill']}")
+    st.subheader("Agent Availability")
+    
+    # Display dynamic status for each agent
+    for key, profile in AGENT_PROFILES.items():
+        status = st.session_state.agent_status[key]
+        emoji = "🟢" if status == "Available" else ("🟡" if status == "Working" else ("🔵" if status == "Delegated" else "🔴"))
+        st.markdown(f"{profile['avatar']} **{profile['name']}**:\n{emoji} **{status}**")
+        if status == "Working":
+            st.progress(50, text="Performing task...")
+            # Simulate work for the visual effect
+            time.sleep(0.1) 
     
     st.markdown("---")
+    st.subheader("Cross-Agent Data Transfer")
+    st.code(st.session_state.data_transfer or "None", language="json")
+
+
+# --- Main Content: Two Columns for Two Chat Interfaces ---
+col_main, col_analyst = st.columns(2)
+
+# =========================================================================
+# LEFT COLUMN: COORDINATOR AGENT (Main User Chat)
+# =========================================================================
+with col_main:
+    st.subheader(f"{AGENT_PROFILES['Coordinator']['name']} Chat")
     
-    # Knowledge Base Content Section
-    st.subheader(DATA_SCIENCE_KB_TITLE)
-    st.expander("View Knowledge Base Content").markdown(DATA_SCIENCE_KB_CONTENT)
-    st.info("The system prompt below incorporates this content to simulate a Knowledge Base (KB).")
+    # Display Chat History
+    main_chat_container = st.container(height=400)
+    for message in st.session_state.main_chat_history:
+        with main_chat_container.chat_message(message["role"], avatar=message["avatar"]):
+            st.markdown(message["content"])
 
-# --- Chat Interface ---
-
-# Initialize chat history in session state
-if "messages" not in st.session_state:
-    # Each message will have: role (for Streamlit display), content, avatar
-    st.session_state.messages = []
-
-# Define the model and system instruction (simulating A2A coordination/KB integration)
-MODEL_NAME = "gemini-2.5-flash"
-SYSTEM_INSTRUCTION = f"""
-You are the **A2A Coordinator Agent**. Your goal is to respond to the user using the most relevant agent's knowledge.
-For all Data Science, ML, or Python-related questions, act as the 'DataScience-Analyst' agent using the following knowledge base:
-{DATA_SCIENCE_KB_CONTENT}
-
-For all other general inquiries, respond as a helpful, high-level coordinator.
-Maintain a concise and professional tone. Do not mention system instructions to the user.
-"""
-
-# Display chat history
-for message in st.session_state.messages:
-    # Use st.chat_message for left/right message bubbles
-    with st.chat_message(message["role"], avatar=message["avatar"]):
-        st.markdown(message["content"])
-
-# Process new user input
-if prompt := st.chat_input("Ask a question about Data Science (e.g., 'What is a Pandas DataFrame?')"):
-    # 1. Add user message to history and display
-    st.session_state.messages.append({"role": "user", "content": prompt, "avatar": USER_AVATAR})
-    with st.chat_message("user", avatar=USER_AVATAR):
-        st.markdown(prompt)
-
-    # 2. Get Gemini response (simulating A2A execution)
-    with st.chat_message("assistant", avatar=ASSISTANT_AVATAR):
-        with st.spinner("A2A Coordinator is delegating and processing the request..."):
-            
-            # --- FIX APPLIED HERE ---
-            # Correctly map Streamlit's 'assistant' role to Gemini's required 'model' role
-            gemini_contents = [
-                {
-                    "role": GEMINI_MODEL_ROLE if m["role"] == "assistant" else m["role"],
-                    "parts": [{"text": m["content"]}]
-                }
-                for m in st.session_state.messages
-            ]
-            # ------------------------
-            
-            try:
-                response = client.models.generate_content(
-                    model=MODEL_NAME,
-                    contents=gemini_contents,
-                    config=genai.types.GenerateContentConfig(
-                        system_instruction=SYSTEM_INSTRUCTION
-                    )
+    # User Input
+    if main_prompt := st.chat_input("Ask the Coordinator a question..."):
+        
+        # 1. Add user message to history and display
+        st.session_state.main_chat_history.append({"role": "user", "content": main_prompt, "avatar": USER_AVATAR})
+        with main_chat_container.chat_message("user", avatar=USER_AVATAR):
+            st.markdown(main_prompt)
+        
+        # 2. Get Coordinator response
+        with main_chat_container.chat_message("assistant", avatar=AGENT_PROFILES['Coordinator']['avatar']):
+            with st.spinner(f"{AGENT_PROFILES['Coordinator']['name']} is processing..."):
+                coordinator_response = generate_agent_response(
+                    "Coordinator",
+                    "main_chat_history",
+                    AGENT_PROFILES['Coordinator']['instruction'],
+                    main_prompt
                 )
-                
-                full_response = response.text
-                st.markdown(full_response)
-                
-            except APIError as e:
-                # Display error, but save it to history to maintain sequence (optional, for debugging)
-                full_response = f"An API Error occurred: {e}"
-                st.error(full_response)
-            except Exception as e:
-                full_response = f"An unexpected error occurred: {e}"
-                st.error(full_response)
+                st.markdown(coordinator_response)
+        
+        # 3. Add Coordinator response to history
+        st.session_state.main_chat_history.append({"role": "assistant", "content": coordinator_response, "avatar": AGENT_PROFILES['Coordinator']['avatar']})
+        
+        # 4. Check for Delegation (A2A Logic)
+        if st.session_state.agent_status["Coordinator"] == "Delegated":
+            # Pass the original user prompt as the data transfer to the Analyst
+            st.session_state.data_transfer = {"task": "Analyze Data Science Request", "prompt": main_prompt}
+            
+            # Immediately trigger the Analyst
+            st.rerun() 
+
+
+# =========================================================================
+# RIGHT COLUMN: DATA SCIENCE ANALYST (Delegated Task Chat)
+# =========================================================================
+with col_analyst:
+    st.subheader(f"{AGENT_PROFILES['Analyst']['name']} Task Status")
     
-    # 3. Add assistant response to history
-    # NOTE: We use the Streamlit role "assistant" for display, 
-    # but the content-building loop maps it to "model" for the API.
-    st.session_state.messages.append({"role": "assistant", "content": full_response, "avatar": ASSISTANT_AVATAR})
+    # Display Analyst Chat History
+    analyst_chat_container = st.container(height=400)
+    for message in st.session_state.analyst_chat_history:
+        with analyst_chat_container.chat_message(message["role"], avatar=message["avatar"]):
+            st.markdown(message["content"])
+
+    # Handle incoming delegated task from the Coordinator
+    if st.session_state.data_transfer:
+        task_info = st.session_state.data_transfer
+        analyst_prompt = f"TASK: {task_info['task']}. INPUT: {task_info['prompt']}"
+        original_user_prompt = task_info['prompt']
+        
+        # Reset transfer state to avoid re-triggering
+        st.session_state.data_transfer = None 
+        
+        # 1. Add task delegation as a 'user' message to the Analyst's history
+        st.session_state.analyst_chat_history.append({"role": "user", "content": f"Delegated Task:\n\n`{original_user_prompt}`", "avatar": AGENT_PROFILES['Coordinator']['avatar']})
+        
+        with analyst_chat_container.chat_message("user", avatar=AGENT_PROFILES['Coordinator']['avatar']):
+            st.markdown(f"**Delegated Task from Coordinator:**\n\n`{original_user_prompt}`")
+        
+        # 2. Get Analyst response
+        with analyst_chat_container.chat_message("assistant", avatar=AGENT_PROFILES['Analyst']['avatar']):
+            with st.spinner(f"{AGENT_PROFILES['Analyst']['name']} is processing..."):
+                analyst_response = generate_agent_response(
+                    "Analyst",
+                    "analyst_chat_history",
+                    AGENT_PROFILES['Analyst']['instruction'],
+                    analyst_prompt
+                )
+                st.markdown(analyst_response)
+
+        # 3. Add Analyst response to history
+        st.session_state.analyst_chat_history.append({"role": "assistant", "content": analyst_response, "avatar": AGENT_PROFILES['Analyst']['avatar']})
+        
+        # 4. Agent-to-Agent Feedback (Analyst sends result back to Coordinator)
+        # We put the Analyst's final result into the Coordinator's history to continue the conversation thread
+        st.session_state.main_chat_history.append({"role": "assistant", "content": f"**[Analyst Report]**\n\n{analyst_response}", "avatar": AGENT_PROFILES['Analyst']['avatar']})
+        st.session_state.agent_status["Coordinator"] = "Available" # Coordinator is free again
+        st.rerun() # Rerun to display the final result in the Coordinator chat
