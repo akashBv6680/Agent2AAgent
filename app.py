@@ -1,23 +1,26 @@
 import streamlit as st
 import os
 
-# Updated imports for modern LangChain structure
-from langchain import hub
+# --- CRITICAL IMPORTS ---
+# Hub is now imported from the separate 'langchain_hub' package.
+from langchain import hub 
 from langchain.agents import AgentExecutor, create_react_agent
-from langchain.tools import DuckDuckGoSearchRun
+
+# Components are imported from their respective modular packages
 from langchain_openai import ChatOpenAI
-from langchain.callbacks import StreamlitCallbackHandler
+from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_community.callbacks.streamlit import StreamlitCallbackHandler
+
 
 # --- Configuration and Setup ---
 
 st.set_page_config(page_title="Streamlit LangChain Agent Chat", layout="wide")
 st.title("🤖 LangChain Agent with Search")
 
-# Check for API Key
-# The agent will not run without an OPENAI_API_KEY set in Streamlit secrets or env var.
+# Streamlit Cloud uses st.secrets to manage API keys.
+# Ensure you have a section named [secrets] with openai_api_key in your secrets.toml
 if "OPENAI_API_KEY" not in st.secrets:
-    st.error("Please set the `OPENAI_API_KEY` in your `secrets.toml` file.")
+    st.error("Please set the `OPENAI_API_KEY` in your Streamlit Cloud secrets.")
     st.stop()
 openai_api_key = st.secrets["OPENAI_API_KEY"]
 
@@ -27,15 +30,22 @@ openai_api_key = st.secrets["OPENAI_API_KEY"]
 @st.cache_resource
 def get_agent_executor(api_key):
     """Initializes and returns the LangChain Agent Executor."""
-    # 1. Initialize the LLM (ChatOpenAI is generally preferred for agents)
-    llm = ChatOpenAI(temperature=0, streaming=True, api_key=api_key, model="gpt-3.5-turbo")
+    
+    # 1. Initialize the LLM
+    llm = ChatOpenAI(
+        temperature=0, 
+        streaming=True, 
+        api_key=api_key, 
+        model="gpt-3.5-turbo"
+    )
 
-    # 2. Define the tools the agent will use
+    # 2. Define the tools
     tools = [
         DuckDuckGoSearchRun(name="DuckDuckGo Search"),
     ]
 
-    # 3. Get the ReAct prompt template from LangChain Hub
+    # 3. Pull the prompt template from LangChain Hub
+    # The 'hub' object must be imported from the correct package (langchain-hub)
     prompt = hub.pull("hwchase17/react")
 
     # 4. Create the ReAct agent
@@ -51,6 +61,7 @@ def get_agent_executor(api_key):
     
     return agent_executor
 
+# Initialize the agent once
 agent_executor = get_agent_executor(openai_api_key)
 
 
@@ -66,6 +77,7 @@ for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
+
 # --- Main Logic: React to User Input ---
 
 if prompt := st.chat_input("Ask a question to the agent..."):
@@ -75,11 +87,10 @@ if prompt := st.chat_input("Ask a question to the agent..."):
 
     # 2. Display assistant thinking and response with streaming
     with st.chat_message("assistant"):
-        # Create an empty container to receive the streamed output
+        # Create a container for streamed output
         st_container = st.empty()
         
-        # Initialize the StreamlitCallbackHandler
-        # The agent's thoughts and final answer will be streamed here.
+        # Initialize the callback handler to stream agent thoughts to the container
         st_callback = StreamlitCallbackHandler(st_container)
         
         final_response = ""
