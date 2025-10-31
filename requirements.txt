@@ -1,5 +1,3 @@
-streamlit
-google-genai
-langchain
-langchain-openai
-duckduckgo-search
+streamlit>=1.36.0
+google-generativeai>=0.14.0
+python-dotenv 
